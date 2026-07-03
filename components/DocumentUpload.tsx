@@ -30,12 +30,24 @@ export function DocumentUpload({ onUploaded, disabled }: DocumentUploadProps) {
           body: formData,
         });
 
-        const data = (await response.json()) as {
+        const contentType = response.headers.get("content-type") ?? "";
+        const rawBody = await response.text();
+        let data: {
           documentId?: string;
           chunkCount?: number;
           filename?: string;
           error?: string;
         };
+
+        if (contentType.includes("application/json")) {
+          data = JSON.parse(rawBody) as typeof data;
+        } else {
+          throw new Error(
+            response.ok
+              ? "Upload returned an unexpected response"
+              : rawBody.trim().slice(0, 200) || `Upload failed (${response.status})`,
+          );
+        }
 
         if (!response.ok) {
           throw new Error(data.error ?? "Upload failed");
