@@ -5,7 +5,9 @@ Chat with uploaded PDFs using Pinecone integrated retrieval, streamed answers, a
 ## Links
 
 - **GitHub:** https://github.com/shawnmcmahon/doc-chat-rag
-- **Live demo:** _Set after Vercel deploy — run `vercel --prod` with env vars configured_
+- **Live demo:** https://doc-chat-rag-alpha.vercel.app
+
+> **Note:** Add `OPENAI_API_KEY`, `PINECONE_API_KEY`, and `PINECONE_INDEX` to Vercel project env vars (and `.env.local` locally) before uploading documents.
 
 ## Architecture
 
