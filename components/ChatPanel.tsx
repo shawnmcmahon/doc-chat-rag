@@ -1,15 +1,23 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { DefaultChatTransport, type UIMessage } from "ai";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { RetrievedSource } from "@/lib/types";
 
 type ChatPanelProps = {
+  chatId: string;
   documentId: string | null;
+  initialMessages?: UIMessage[];
+  initialMessageSources?: Record<string, RetrievedSource[]>;
   onSourcesChange: (sources: RetrievedSource[]) => void;
   onCitationHover: (index: number | null) => void;
+  onChatUpdate: (payload: {
+    chatId: string;
+    messages: UIMessage[];
+    messageSources: Record<string, RetrievedSource[]>;
+  }) => void;
 };
 
 function extractText(parts: Array<{ type: string; text?: string }>): string {
@@ -64,15 +72,20 @@ function renderWithCitations(
 }
 
 export function ChatPanel({
+  chatId,
   documentId,
+  initialMessages = [],
+  initialMessageSources = {},
   onSourcesChange,
   onCitationHover,
+  onChatUpdate,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [messageSources, setMessageSources] = useState<
     Record<string, RetrievedSource[]>
-  >({});
-  const streamingMessageIdRef = useRef<string | null>(null);
+  >(initialMessageSources);
+  const pendingSourcesRef = useRef<RetrievedSource[] | null>(null);
+  const assistantCountBeforeSendRef = useRef(0);
 
   const transport = useMemo(
     () =>
@@ -83,35 +96,65 @@ export function ChatPanel({
     [documentId],
   );
 
-  const { messages, sendMessage, status, error } = useChat({
-    id: documentId ?? undefined,
+  const { messages, sendMessage, status, error, setMessages } = useChat({
+    id: chatId,
+    messages: initialMessages,
     transport,
     onData: (dataPart) => {
       if (dataPart.type !== "data-sources") return;
 
       const sources = dataPart.data as RetrievedSource[];
-      const messageId =
-        streamingMessageIdRef.current ?? `pending-${Date.now()}`;
-
-      setMessageSources((current) => ({
-        ...current,
-        [messageId]: sources,
-      }));
+      pendingSourcesRef.current = sources;
       onSourcesChange(sources);
     },
   });
 
   useEffect(() => {
-    if (status === "streaming" || status === "submitted") {
-      const lastAssistant = [...messages]
-        .reverse()
-        .find((message) => message.role === "assistant");
+    setMessageSources(initialMessageSources);
+    setMessages(initialMessages);
+    pendingSourcesRef.current = null;
+    assistantCountBeforeSendRef.current = initialMessages.filter(
+      (message) => message.role === "assistant",
+    ).length;
+  }, [chatId, initialMessageSources, initialMessages, setMessages]);
 
-      if (lastAssistant) {
-        streamingMessageIdRef.current = lastAssistant.id;
-      }
-    }
-  }, [messages, status]);
+  const assignPendingSources = useCallback(() => {
+    const pendingSources = pendingSourcesRef.current;
+    if (!pendingSources) return;
+
+    const assistantMessages = messages.filter(
+      (message) => message.role === "assistant",
+    );
+    const targetMessage = assistantMessages[assistantCountBeforeSendRef.current];
+    if (!targetMessage) return;
+
+    setMessageSources((current) => {
+      if (current[targetMessage.id]) return current;
+
+      return {
+        ...current,
+        [targetMessage.id]: pendingSources,
+      };
+    });
+    pendingSourcesRef.current = null;
+  }, [messages]);
+
+  useEffect(() => {
+    assignPendingSources();
+  }, [assignPendingSources]);
+
+  const latestAssistantSources = useMemo(() => {
+    const assistantMessages = messages.filter(
+      (message) => message.role === "assistant",
+    );
+    const lastMessage = assistantMessages.at(-1);
+    if (!lastMessage) return null;
+    return messageSources[lastMessage.id] ?? null;
+  }, [messages, messageSources]);
+
+  useEffect(() => {
+    onChatUpdate({ chatId, messages, messageSources });
+  }, [chatId, messages, messageSources, onChatUpdate]);
 
   const isBusy = status === "streaming" || status === "submitted";
 
@@ -120,7 +163,8 @@ export function ChatPanel({
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
         {messages.length === 0 ? (
           <p className="text-sm text-zinc-500">
-            Upload a PDF, then ask a question about its contents.
+            Upload a PDF or select a document, then ask a question about its
+            contents.
           </p>
         ) : null}
 
@@ -147,6 +191,11 @@ export function ChatPanel({
                     if (!sources) return;
                     onSourcesChange(sources);
                   }}
+                  onMouseLeave={() => {
+                    if (latestAssistantSources) {
+                      onSourcesChange(latestAssistantSources);
+                    }
+                  }}
                 >
                   {renderWithCitations(text, onCitationHover)}
                 </div>
@@ -168,6 +217,12 @@ export function ChatPanel({
           event.preventDefault();
           if (!documentId || !input.trim() || isBusy) return;
 
+          assistantCountBeforeSendRef.current = messages.filter(
+            (message) => message.role === "assistant",
+          ).length;
+          pendingSourcesRef.current = null;
+          onSourcesChange([]);
+
           void sendMessage({ text: input.trim() });
           setInput("");
         }}
@@ -179,7 +234,7 @@ export function ChatPanel({
             placeholder={
               documentId
                 ? "Ask a question about your document..."
-                : "Upload a PDF to start chatting"
+                : "Select a document to start chatting"
             }
             disabled={!documentId || isBusy}
             className="flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none ring-blue-500 focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900"
