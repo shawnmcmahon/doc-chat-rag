@@ -6,9 +6,13 @@ import type { DocumentChunk, RetrievedSource, SearchResult } from "./types";
 const BATCH_SIZE = 100;
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 500;
-const MIN_RELEVANCE_SCORE = 0.03;
+/** Calibrated for llama-text-embed-v2 on the eval golden set. */
+const MIN_RELEVANCE_SCORE = 0.05;
+const NAMESPACE_READY_TIMEOUT_MS = 30_000;
+const NAMESPACE_READY_POLL_MS = 500;
 
 let pineconeClient: Pinecone | null = null;
+let indexEnsured: Promise<void> | null = null;
 
 function getPinecone(): Pinecone {
   if (!pineconeClient) {
@@ -22,7 +26,13 @@ export function documentNamespace(documentId: string): string {
   return `doc_${documentId}`;
 }
 
-export async function ensurePineconeIndex(): Promise<void> {
+function isAlreadyExistsError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("already exists") || message.includes("already_exist");
+}
+
+async function ensurePineconeIndexInternal(): Promise<void> {
   const env = getServerEnv();
   const pc = getPinecone();
 
@@ -33,19 +43,37 @@ export async function ensurePineconeIndex(): Promise<void> {
     return;
   }
 
-  await pc.createIndexForModel({
-    name: env.PINECONE_INDEX,
-    cloud: "aws",
-    region: "us-east-1",
-    embed: {
-      model: "llama-text-embed-v2",
-      fieldMap: { text: "chunk_text" },
-    },
-    waitUntilReady: true,
-  });
+  try {
+    await pc.createIndexForModel({
+      name: env.PINECONE_INDEX,
+      cloud: "aws",
+      region: "us-east-1",
+      embed: {
+        model: "llama-text-embed-v2",
+        fieldMap: { text: "chunk_text" },
+      },
+      waitUntilReady: true,
+    });
+  } catch (error) {
+    if (isAlreadyExistsError(error)) {
+      return;
+    }
+    throw error;
+  }
 }
 
-async function getNamespace(documentId: string) {
+export async function ensurePineconeIndex(): Promise<void> {
+  if (!indexEnsured) {
+    indexEnsured = ensurePineconeIndexInternal().catch((error) => {
+      indexEnsured = null;
+      throw error;
+    });
+  }
+
+  await indexEnsured;
+}
+
+async function getIndexHost(): Promise<string> {
   const env = getServerEnv();
   const pc = getPinecone();
   const indexModel = await pc.describeIndex(env.PINECONE_INDEX);
@@ -55,6 +83,12 @@ async function getNamespace(documentId: string) {
     throw new Error(`Pinecone index ${env.PINECONE_INDEX} has no host`);
   }
 
+  return host;
+}
+
+async function getNamespace(documentId: string) {
+  const pc = getPinecone();
+  const host = await getIndexHost();
   return pc.index({ host, namespace: documentNamespace(documentId) });
 }
 
@@ -75,6 +109,35 @@ async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
   }
 
   throw lastError;
+}
+
+export async function waitForNamespaceRecords(
+  documentId: string,
+  expectedCount: number,
+  options: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? NAMESPACE_READY_TIMEOUT_MS;
+  const pollMs = options.pollMs ?? NAMESPACE_READY_POLL_MS;
+  const namespace = documentNamespace(documentId);
+  const pc = getPinecone();
+  const host = await getIndexHost();
+  const index = pc.index({ host });
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const stats = await index.describeIndexStats();
+    const recordCount = stats.namespaces?.[namespace]?.recordCount ?? 0;
+
+    if (recordCount >= expectedCount) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  throw new Error(
+    `Timed out waiting for Pinecone namespace ${namespace} to reach ${expectedCount} records`,
+  );
 }
 
 export async function upsertDocumentChunks(
@@ -143,13 +206,8 @@ export async function searchDocument(
 }
 
 export async function deleteDocumentNamespace(documentId: string): Promise<void> {
-  const env = getServerEnv();
   const pc = getPinecone();
-  const indexModel = await pc.describeIndex(env.PINECONE_INDEX);
-  const host = indexModel.host;
-
-  if (!host) return;
-
+  const host = await getIndexHost();
   const index = pc.index({ host });
   await index.deleteNamespace(documentNamespace(documentId));
 }

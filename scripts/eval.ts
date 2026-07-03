@@ -9,9 +9,11 @@ import { generateText } from "ai";
 import { chunkPages } from "../lib/chunk";
 import { parsePdf } from "../lib/parse-pdf";
 import {
+  deleteDocumentNamespace,
   ensurePineconeIndex,
   searchDocument,
   upsertDocumentChunks,
+  waitForNamespaceRecords,
 } from "../lib/pinecone";
 import { buildRagPrompt, buildSystemPrompt, REFUSAL_MESSAGE } from "../lib/rag-prompt";
 
@@ -31,7 +33,7 @@ function checkRetrieval(
   if (keywords.length === 0) return true;
 
   const haystack = hits.map((hit) => hit.text.toLowerCase()).join("\n");
-  return keywords.some((keyword) => haystack.includes(keyword.toLowerCase()));
+  return keywords.every((keyword) => haystack.includes(keyword.toLowerCase()));
 }
 
 function checkAnswer(answer: string, expected: string[]): boolean {
@@ -51,54 +53,62 @@ async function main() {
   const documentId = randomUUID();
   const pages = await parsePdf(pdfBuffer);
   const chunks = chunkPages(pages, documentId, "sample.pdf");
-  await upsertDocumentChunks(documentId, chunks);
 
-  console.info(`Indexed sample.pdf as ${documentId} (${chunks.length} chunks)\n`);
-  console.info("| # | Question | Retrieval | Answer | Pass |");
-  console.info("|---|----------|-----------|--------|------|");
+  try {
+    await upsertDocumentChunks(documentId, chunks);
+    await waitForNamespaceRecords(documentId, chunks.length);
 
-  let passed = 0;
+    console.info(`Indexed sample.pdf as ${documentId} (${chunks.length} chunks)\n`);
+    console.info("| # | Question | Retrieval | Answer | Pass |");
+    console.info("|---|----------|-----------|--------|------|");
 
-  for (const [index, testCase] of cases.entries()) {
-    const search = await searchDocument(documentId, testCase.question, 5);
-    const retrievalPass = checkRetrieval(
-      search.sources,
-      testCase.mustRetrieveKeywords,
-    );
+    let passed = 0;
 
-    let answer = REFUSAL_MESSAGE;
+    for (const [index, testCase] of cases.entries()) {
+      const search = await searchDocument(documentId, testCase.question, 5);
+      const retrievalPass = checkRetrieval(
+        search.sources,
+        testCase.mustRetrieveKeywords,
+      );
 
-    if (!search.noContext && !testCase.expectRefusal) {
-      const result = await generateText({
-        model: openai("gpt-4.1-mini"),
-        system: buildSystemPrompt(),
-        prompt: buildRagPrompt(testCase.question, search.sources),
-      });
-      answer = result.text;
-    } else if (testCase.expectRefusal) {
-      answer = search.noContext
-        ? REFUSAL_MESSAGE
-        : (
-            await generateText({
-              model: openai("gpt-4.1-mini"),
-              system: buildSystemPrompt(),
-              prompt: buildRagPrompt(testCase.question, search.sources),
-            })
-          ).text;
+      let answer = REFUSAL_MESSAGE;
+
+      if (!search.noContext && !testCase.expectRefusal) {
+        const result = await generateText({
+          model: openai("gpt-4.1-mini"),
+          system: buildSystemPrompt(),
+          prompt: buildRagPrompt(testCase.question, search.sources),
+        });
+        answer = result.text;
+      } else if (testCase.expectRefusal) {
+        answer = search.noContext
+          ? REFUSAL_MESSAGE
+          : (
+              await generateText({
+                model: openai("gpt-4.1-mini"),
+                system: buildSystemPrompt(),
+                prompt: buildRagPrompt(testCase.question, search.sources),
+              })
+            ).text;
+      }
+
+      const answerPass = checkAnswer(answer, testCase.mustAnswerContain);
+      const rowPass = retrievalPass && answerPass;
+      if (rowPass) passed += 1;
+
+      const label = testCase.question.slice(0, 28).padEnd(28, " ");
+      console.info(
+        `| ${index + 1} | ${label} | ${retrievalPass ? "PASS" : "FAIL"} | ${answerPass ? "PASS" : "FAIL"} | ${rowPass ? "PASS" : "FAIL"} |`,
+      );
     }
 
-    const answerPass = checkAnswer(answer, testCase.mustAnswerContain);
-    const rowPass = retrievalPass && answerPass;
-    if (rowPass) passed += 1;
-
-    const label = testCase.question.slice(0, 28).padEnd(28, " ");
-    console.info(
-      `| ${index + 1} | ${label} | ${retrievalPass ? "PASS" : "FAIL"} | ${answerPass ? "PASS" : "FAIL"} | ${rowPass ? "PASS" : "FAIL"} |`,
-    );
+    console.info(`\n${passed}/${cases.length} cases passed`);
+    process.exit(passed === cases.length ? 0 : 1);
+  } finally {
+    await deleteDocumentNamespace(documentId).catch((error) => {
+      console.warn(`Failed to delete eval namespace ${documentId}:`, error);
+    });
   }
-
-  console.info(`\n${passed}/${cases.length} cases passed`);
-  process.exit(passed === cases.length ? 0 : 1);
 }
 
 void main();

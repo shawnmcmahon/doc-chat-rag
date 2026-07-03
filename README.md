@@ -55,7 +55,7 @@ flowchart LR
 | Chunking | Fixed-size with paragraph boundaries | Fast to ship; eval-driven tuning beats semantic chunking for day-one |
 | Vector store | Pinecone integrated embeddings | Managed speed; no separate embedding API during ingest/query |
 | Chat model | `gpt-4.1-mini` | Strong instruction-following for cited RAG vs reasoning models that drift |
-| Refusal | Score threshold + prompt | Saves cost; refuses before LLM when retrieval score < 0.03 |
+| Refusal | Score threshold + prompt | Saves cost; refuses before LLM when retrieval score < 0.05 |
 
 ## Cost estimate (~5 users/month)
 
