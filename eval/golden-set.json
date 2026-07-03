@@ -1,0 +1,53 @@
+[
+  {
+    "question": "What is the refund policy?",
+    "mustRetrieveKeywords": ["refund", "30 days"],
+    "mustAnswerContain": ["30", "refund"]
+  },
+  {
+    "question": "When was Acme Docs founded?",
+    "mustRetrieveKeywords": ["2019", "founded"],
+    "mustAnswerContain": ["2019"]
+  },
+  {
+    "question": "What is the support email address?",
+    "mustRetrieveKeywords": ["support@example.com"],
+    "mustAnswerContain": ["support@example.com"]
+  },
+  {
+    "question": "What does the Enterprise plan include?",
+    "mustRetrieveKeywords": ["SSO", "Enterprise"],
+    "mustAnswerContain": ["SSO"]
+  },
+  {
+    "question": "How long are uploaded documents retained on the Starter plan?",
+    "mustRetrieveKeywords": ["90 days", "Starter"],
+    "mustAnswerContain": ["90"]
+  },
+  {
+    "question": "What encryption is used for files at rest?",
+    "mustRetrieveKeywords": ["AES-256", "encrypted"],
+    "mustAnswerContain": ["AES-256"]
+  },
+  {
+    "question": "How much does the Pro plan cost?",
+    "mustRetrieveKeywords": ["29", "Pro"],
+    "mustAnswerContain": ["29"]
+  },
+  {
+    "question": "What is the API rate limit?",
+    "mustRetrieveKeywords": ["100", "minute"],
+    "mustAnswerContain": ["100"]
+  },
+  {
+    "question": "Do you use customer documents to train foundation models?",
+    "mustRetrieveKeywords": ["do not", "train"],
+    "mustAnswerContain": ["do not"]
+  },
+  {
+    "question": "What is the capital of France?",
+    "mustRetrieveKeywords": [],
+    "mustAnswerContain": ["don't have enough information"],
+    "expectRefusal": true
+  }
+]
