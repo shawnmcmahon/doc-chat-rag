@@ -42,19 +42,28 @@ export function chunkPages(
 
     for (const paragraph of paragraphs) {
       if (paragraph.length > CHUNK_SIZE) {
+        let carry = "";
         if (buffer) {
           flush(buffer);
-          buffer = takeOverlap(buffer);
+          carry = takeOverlap(buffer);
         }
 
         let start = 0;
+        if (carry) {
+          const room = CHUNK_SIZE - carry.length;
+          const portion = paragraph.slice(0, room);
+          flush(carry + portion);
+          start = Math.max(0, room - CHUNK_OVERLAP);
+        }
+
         while (start < paragraph.length) {
           const end = Math.min(start + CHUNK_SIZE, paragraph.length);
           flush(paragraph.slice(start, end));
           if (end >= paragraph.length) break;
           start = end - CHUNK_OVERLAP;
         }
-        buffer = "";
+
+        buffer = takeOverlap(paragraph.slice(start, paragraph.length));
         continue;
       }
 

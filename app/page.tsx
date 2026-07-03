@@ -46,6 +46,7 @@ export default function HomePage() {
             ) : null}
 
             <ChatPanel
+              key={documentId ?? "no-document"}
               documentId={documentId}
               onSourcesChange={setSources}
               onCitationHover={setHighlightedIndex}

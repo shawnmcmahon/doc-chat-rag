@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { RetrievedSource } from "@/lib/types";
 
@@ -17,6 +17,17 @@ function extractText(parts: Array<{ type: string; text?: string }>): string {
     .filter((part) => part.type === "text")
     .map((part) => part.text ?? "")
     .join("");
+}
+
+function formatChatError(error: Error): string {
+  try {
+    const parsed = JSON.parse(error.message) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Plain-text or non-JSON errors fall through.
+  }
+
+  return error.message;
 }
 
 function renderWithCitations(
@@ -58,6 +69,10 @@ export function ChatPanel({
   onCitationHover,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
+  const [messageSources, setMessageSources] = useState<
+    Record<string, RetrievedSource[]>
+  >({});
+  const streamingMessageIdRef = useRef<string | null>(null);
 
   const transport = useMemo(
     () =>
@@ -69,13 +84,34 @@ export function ChatPanel({
   );
 
   const { messages, sendMessage, status, error } = useChat({
+    id: documentId ?? undefined,
     transport,
     onData: (dataPart) => {
-      if (dataPart.type === "data-sources") {
-        onSourcesChange(dataPart.data as RetrievedSource[]);
-      }
+      if (dataPart.type !== "data-sources") return;
+
+      const sources = dataPart.data as RetrievedSource[];
+      const messageId =
+        streamingMessageIdRef.current ?? `pending-${Date.now()}`;
+
+      setMessageSources((current) => ({
+        ...current,
+        [messageId]: sources,
+      }));
+      onSourcesChange(sources);
     },
   });
+
+  useEffect(() => {
+    if (status === "streaming" || status === "submitted") {
+      const lastAssistant = [...messages]
+        .reverse()
+        .find((message) => message.role === "assistant");
+
+      if (lastAssistant) {
+        streamingMessageIdRef.current = lastAssistant.id;
+      }
+    }
+  }, [messages, status]);
 
   const isBusy = status === "streaming" || status === "submitted";
 
@@ -104,7 +140,14 @@ export function ChatPanel({
               {isUser ? (
                 <p className="whitespace-pre-wrap">{text}</p>
               ) : (
-                <div className="whitespace-pre-wrap">
+                <div
+                  className="whitespace-pre-wrap"
+                  onMouseEnter={() => {
+                    const sources = messageSources[message.id];
+                    if (!sources) return;
+                    onSourcesChange(sources);
+                  }}
+                >
                   {renderWithCitations(text, onCitationHover)}
                 </div>
               )}
@@ -113,7 +156,9 @@ export function ChatPanel({
         })}
 
         {error ? (
-          <p className="text-sm text-red-600 dark:text-red-400">{error.message}</p>
+          <p className="text-sm text-red-600 dark:text-red-400">
+            {formatChatError(error)}
+          </p>
         ) : null}
       </div>
 

@@ -3,8 +3,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { chunkPages } from "@/lib/chunk";
-import { ensurePineconeIndex, upsertDocumentChunks } from "@/lib/pinecone";
+import {
+  ensurePineconeIndex,
+  upsertDocumentChunks,
+  waitForNamespaceRecords,
+} from "@/lib/pinecone";
 import { parsePdf } from "@/lib/parse-pdf";
+import { rateLimitResponse } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -12,6 +17,9 @@ export const maxDuration = 60;
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 export async function POST(request: Request) {
+  const limited = rateLimitResponse(request, "ingest", 10, 60 * 60 * 1000);
+  if (limited) return limited;
+
   try {
     const formData = await request.formData();
     const file = formData.get("file");
@@ -53,6 +61,7 @@ export async function POST(request: Request) {
 
     await ensurePineconeIndex();
     await upsertDocumentChunks(documentId, chunks);
+    await waitForNamespaceRecords(documentId, chunks.length);
 
     const payload = {
       documentId,
@@ -61,7 +70,7 @@ export async function POST(request: Request) {
     };
 
     z.object({
-      documentId: z.string().uuid(),
+      documentId: z.uuid(),
       chunkCount: z.number().int().positive(),
       filename: z.string(),
     }).parse(payload);

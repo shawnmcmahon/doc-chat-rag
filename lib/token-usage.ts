@@ -18,7 +18,7 @@ export function logTokenUsage(inputTokens: number, outputTokens: number): void {
   console.info("[token-usage]", {
     inputTokens,
     outputTokens,
-    sessionTotals: { ...totals },
+    instanceTotals: { ...totals },
   });
 }
 
